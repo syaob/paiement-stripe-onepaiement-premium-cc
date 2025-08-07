@@ -1,10 +1,9 @@
-# Guide Pédagogique : Application d'Abonnement et d'Achat de Produits avec Next.js et Stripe
+# Guide Pédagogique : Application d'Achat de Produits avec Next.js et Stripe
 
 Ce document détaille l'architecture, les fonctionnalités et les étapes qui ont été suivies pour construire ce projet. L'objectif est de créer une application web complète où les utilisateurs peuvent :
 1.  S'authentifier via des fournisseurs OAuth (GitHub, Google).
 2.  Acheter des produits individuels.
-3.  Souscrire à un abonnement payant pour accéder à du contenu exclusif.
-4.  Gérer leur abonnement via le portail client de Stripe.
+3.  Gérer leur historique d'achats.
 
 ## 1. Analyse de la Structure du Projet
 
@@ -28,9 +27,7 @@ Voici un aperçu des fichiers et dossiers les plus importants et de leur rôle d
     │   │   ├───checkout/
     │   │   │   └───route.ts   # Crée la session de paiement Stripe.
     │   │   └───webhook/
-    │   │       └───route.ts   # Écoute les événements Stripe (webhooks).
-    │   ├───premium/
-    │   │   └───page.tsx     # Page accessible uniquement aux abonnés.
+    │   │       └───route.ts   # (Futur) Écoute les événements Stripe (webhooks).
     │   ├───products/
     │   │   └───page.tsx     # Affiche tous les produits disponibles.
     │   ├───payment-success/
@@ -52,14 +49,15 @@ Le schéma de la base de données est le fondement de l'application.
 **Fichier clé : `prisma/schema.prisma`**
 
 *   **`User`** : Ce modèle a été enrichi pour gérer l'état de l'abonnement et la relation avec Stripe.
-    *   `isSubscribed`: Un booléen qui nous permet de savoir instantanément si un utilisateur est un abonné actif.
-    *   `stripeCustomerId`: Un champ crucial qui stocke l'ID du client dans Stripe. Cela permet de lier un utilisateur de notre base de données à un client dans Stripe, essentiel pour gérer les abonnements et les paiements.
+    *   `hasPaid`: Un booléen qui nous permet de savoir instantanément si un utilisateur a déjà effectué un achat.
+    *   `stripeCustomerId`: Un champ crucial qui stocke l'ID du client dans Stripe. Cela permet de lier un utilisateur de notre base de données à un client dans Stripe, essentiel pour gérer les paiements.
 
-*   **`Product`** : Stocke les informations sur les articles à vendre (produits uniques ou abonnements).
-    *   `priceId`: L'ID du tarif (`price_...`) de ce produit dans Stripe.
+*   **`Product`** : Stocke les informations sur les articles à vendre.
 
 *   **`Order`** : Enregistre chaque transaction effectuée.
     *   Permet de suivre quels produits ont été achetés par quel utilisateur.
+
+*   **`OrderItem`** : Représente un article spécifique dans une commande.
 
 ### B. Authentification avec NextAuth.js
 
@@ -71,92 +69,46 @@ Ce fichier configure NextAuth.js :
 1.  **`PrismaAdapter`** : C'est le pont entre NextAuth et notre base de données. Quand un utilisateur se connecte pour la première fois avec un fournisseur (ex: GitHub), l'adaptateur crée automatiquement une nouvelle entrée `User` dans notre base de données.
 2.  **`events`** : Nous utilisons l'événement `createUser` pour une action spécifique : dès qu'un nouvel utilisateur est créé dans notre base de données, nous créons également un client (`Customer`) correspondant dans Stripe. L'ID de ce client Stripe est immédiatement sauvegardé dans notre champ `user.stripeCustomerId`.
 
-```typescript
-// src/app/api/auth/[...nextauth]/route.ts
-
-// ...
-export const authOptions: NextAuthOptions = {
-  adapter: PrismaAdapter(prisma),
-  providers: [/* ... */],
-  events: {
-    createUser: async ({ user }) => {
-      const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-        apiVersion: "2024-06-20",
-      });
-
-      await stripe.customers
-        .create({
-          email: user.email!,
-          name: user.name!,
-        })
-        .then(async (customer) => {
-          return prisma.user.update({
-            where: { id: user.id },
-            data: {
-              stripeCustomerId: customer.id,
-            },
-          });
-        });
-    },
-  },
-  // ...
-};
-// ...
-```
-
 ### C. Processus de Paiement avec Stripe Checkout
 
-Lorsqu'un utilisateur décide d'acheter un produit ou de s'abonner.
+Lorsqu'un utilisateur décide d'acheter un produit.
 
 **Fichier clé : `src/app/api/checkout/route.ts`**
 
 Cette route d'API est appelée par le front-end. Voici son fonctionnement :
-1.  Elle reçoit les `priceId` des produits que l'utilisateur souhaite acheter.
-2.  Elle récupère l'utilisateur actuel via la session NextAuth pour obtenir son `stripeCustomerId`.
-3.  Elle crée une **Session de Paiement Stripe** (`checkout.session`) en spécifiant :
+1.  Elle récupère l'utilisateur actuel via la session NextAuth pour obtenir son `stripeCustomerId`.
+2.  Elle crée une **Session de Paiement Stripe** (`checkout.session`) en spécifiant :
     *   `customer`: Le `stripeCustomerId` de l'utilisateur.
     *   `line_items`: La liste des produits (avec leur `priceId` et quantité).
-    *   `mode`: `'payment'` pour un achat unique, `'subscription'` pour un abonnement.
+    *   `mode`: `'payment'` pour un achat unique.
     *   `success_url` et `cancel_url`: Les pages vers lesquelles l'utilisateur sera redirigé après la transaction.
-4.  Elle renvoie l'URL de la page de paiement Stripe au client, qui s'y redirige.
+3.  Elle renvoie l'URL de la page de paiement Stripe au client, qui s'y redirige.
 
-### D. Synchronisation avec les Webhooks Stripe
+### D. Confirmation de Paiement (Côté Client)
 
-C'est le mécanisme le plus important pour maintenir notre base de données à jour avec ce qui se passe sur Stripe.
+Dans ce projet, la confirmation du paiement et la mise à jour de la base de données sont gérées côté client, sur la page de succès. **Ceci est une approche simplifiée à des fins pédagogiques.**
+
+**Fichier clé : `src/app/payment-success/page.tsx`**
+
+1.  **Récupération de la session Stripe** : Lorsque l'utilisateur est redirigé vers cette page après un paiement, l'URL contient un `session_id`. Nous utilisons cet ID pour récupérer les détails de la session de paiement auprès de Stripe.
+2.  **Vérification de sécurité** : Nous vérifions que l'ID de l'utilisateur dans la session Stripe (`metadata.userId`) correspond à l'ID de l'utilisateur actuellement connecté. C'est une mesure de sécurité pour s'assurer que l'utilisateur correct est crédité pour l'achat.
+3.  **Mise à jour de la base de données** : En fonction du type d'achat (stocké dans les `metadata` de la session Stripe), nous effectuons les actions suivantes :
+    *   **Achat de produit unique** : Nous créons une nouvelle `Order` et les `OrderItem` associés dans la base de données.
+    *   **Accès premium** : Nous mettons à jour le champ `hasPaid` de l'utilisateur à `true`.
+4.  **Redirection** : L'utilisateur est ensuite redirigé vers la page appropriée (`/products` ou `/premium`).
+
+> **Note Importante** : Gérer la logique de confirmation côté client n'est **pas recommandé en production**. Un utilisateur pourrait potentiellement accéder à l'URL de succès sans avoir réellement payé. La méthode robuste consiste à utiliser les Webhooks Stripe.
+
+### E. (Avancé) Synchronisation avec les Webhooks Stripe
+
+Les webhooks sont le mécanisme **recommandé en production** pour maintenir une base de données à jour de manière fiable et sécurisée.
 
 **Fichier clé : `src/app/api/webhook/route.ts`**
 
-Stripe envoie des notifications (événements) à cette route de manière asynchrone.
-1.  **Sécurité** : La première étape est de vérifier que la requête provient bien de Stripe en utilisant la signature du webhook (`stripe-signature`) et notre secret de webhook (`STRIPE_WEBHOOK_SECRET`). C'est essentiel pour éviter les fausses notifications.
-2.  **Traitement des événements** : Nous utilisons un `switch` pour gérer différents types d'événements. Le plus important est :
-    *   **`checkout.session.completed`** : Cet événement est déclenché lorsqu'un paiement réussit.
-        *   Si c'est un **abonnement**, nous mettons à jour le champ `isSubscribed` de l'utilisateur à `true`.
-        *   Si c'est un **achat unique**, nous créons une nouvelle entrée dans la table `Order` pour enregistrer la vente.
-
-```typescript
-// src/app/api/webhook/route.ts
-
-// ...
-switch (event.type) {
-  case "checkout.session.completed":
-    const session = event.data.object;
-
-    if (session.mode === "subscription") {
-      // Gérer l'abonnement
-      await prisma.user.update({
-        where: { stripeCustomerId: session.customer as string },
-        data: { isSubscribed: true },
-      });
-    } else if (session.mode === "payment") {
-      // Gérer l'achat unique
-      const lineItems = await stripe.checkout.sessions.listLineItems(session.id);
-      // ... logique pour créer une commande dans la DB
-    }
-    break;
-  // ... autres cas comme 'customer.subscription.deleted'
-}
-// ...
-```
+Bien que la logique principale soit sur la page de succès dans ce projet, voici comment un webhook fonctionnerait :
+1.  **Événements Asynchrones** : Stripe envoie des notifications (événements) à cette route de manière asynchrone dès qu'un événement pertinent se produit (par exemple, `checkout.session.completed`).
+2.  **Sécurité** : La première étape cruciale est de vérifier que la requête provient bien de Stripe en utilisant la `stripe-signature` et un secret de webhook. Cela empêche les attaques malveillantes.
+3.  **Traitement Fiable** : Le serveur traite l'événement et met à jour la base de données. Cela fonctionne même si l'utilisateur ferme son navigateur immédiatement après le paiement, garantissant qu'aucune transaction n'est perdue.
 
 ## 3. Étapes pour Lancer le Projet en Local
 
@@ -182,7 +134,6 @@ Voici les étapes pour faire fonctionner ce projet sur votre machine.
     *   `GITHUB_CLIENT_ID` et `GITHUB_CLIENT_SECRET`: Depuis votre application OAuth GitHub.
     *   `NEXTAUTH_SECRET`: Un secret aléatoire (`openssl rand -base64 32`).
     *   `STRIPE_SECRET_KEY` et `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`: Depuis votre Dashboard Stripe.
-    *   `STRIPE_WEBHOOK_SECRET`: Généré par le CLI Stripe à l'étape 5.
 
 ### Étape 3 : Configuration de la Base de Données
 
@@ -198,28 +149,16 @@ Voici les étapes pour faire fonctionner ce projet sur votre machine.
     ```
     Cela exécute le script `prisma/seed.ts` pour créer les produits que vous avez définis.
 
-### Étape 4 : Création des Produits dans Stripe
-
-1.  **Connectez-vous à votre Dashboard Stripe.**
-2.  Allez dans la section "Produits" et créez les mêmes produits que ceux définis dans `prisma/seed.ts`.
-3.  Pour chaque produit, copiez son **ID de tarif** (`price_...`) et assurez-vous qu'il correspond à celui dans votre base de données (le `seed` le fait pour vous si les `priceId` sont corrects).
-
-### Étape 5 : Lancement et Test
+### Étape 4 : Lancement et Test
 
 1.  **Démarrez le serveur de développement :**
     ```bash
     npm run dev
     ```
 
-2.  **Dans un autre terminal, lancez le CLI Stripe** pour transférer les événements webhook à votre machine locale. La commande vous donnera le `STRIPE_WEBHOOK_SECRET` (`whsec_...`) à mettre dans votre `.env`.
-    ```bash
-    stripe listen --forward-to localhost:3000/api/webhook
-    ```
-
-3.  **Testez le flux complet :**
+2.  **Testez le flux complet :**
     *   Créez un compte.
-    *   Essayez d'accéder à la page `/premium` (vous devriez être bloqué).
-    *   Allez sur la page des produits, achetez un article ou souscrivez à l'abonnement.
+    *   Allez sur la page des produits, achetez un article.
     *   Utilisez une carte de test Stripe pour finaliser le paiement.
-    *   Vérifiez que le webhook a bien été reçu dans le terminal Stripe.
-    *   Retournez sur la page `/premium` et vérifiez que vous y avez maintenant accès.
+    *   Vous serez redirigé vers la page de succès, qui mettra à jour la base de données.
+    *   Vérifiez dans votre base de données que la commande a bien été créée et que l'utilisateur a le champ `hasPaid` à `true`.
