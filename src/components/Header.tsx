@@ -16,6 +16,9 @@ const Header = () => {
           <li>
             <Link href="/">Accueil</Link>
           </li>
+          <li>
+            <Link href="/products">Produits</Link>
+          </li>
           {session?.user ? (
             <>
               <li>

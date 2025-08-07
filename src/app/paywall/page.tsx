@@ -3,6 +3,9 @@
 import { signIn } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { loadStripe } from "@stripe/stripe-js";
+
+const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLIC_KEY!);
 
 export default function PaywallPage() {
   const router = useRouter();
@@ -12,9 +15,11 @@ export default function PaywallPage() {
   const handlePayment = async () => {
     setLoading(true);
     const res = await fetch("/api/checkout", { method: "POST" });
-    const { url } = await res.json();
-    window.location.href = url;
-    window.location.href = `https://checkout.stripe.com/c/${id}`;
+    const data = await res.json();
+
+    const stripe = await stripePromise;
+    await stripe?.redirectToCheckout({ sessionId: data.id });
+    setLoading(false);
   };
 
   return (

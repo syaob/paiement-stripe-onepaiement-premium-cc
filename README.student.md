@@ -1,150 +1,225 @@
-# Guide de Reproduction : Application d'Abonnement avec Next.js et Stripe
+# Guide Pédagogique : Application d'Abonnement et d'Achat de Produits avec Next.js et Stripe
 
-Ce document détaille l'architecture et les étapes pour reproduire ce projet. L'objectif est de construire une application web où les utilisateurs peuvent s'authentifier, souscrire à un abonnement payant via Stripe, et accéder à du contenu exclusif.
+Ce document détaille l'architecture, les fonctionnalités et les étapes qui ont été suivies pour construire ce projet. L'objectif est de créer une application web complète où les utilisateurs peuvent :
+1.  S'authentifier via des fournisseurs OAuth (GitHub, Google).
+2.  Acheter des produits individuels.
+3.  Souscrire à un abonnement payant pour accéder à du contenu exclusif.
+4.  Gérer leur abonnement via le portail client de Stripe.
 
 ## 1. Analyse de la Structure du Projet
 
-Comprendre le rôle de chaque fichier est essentiel pour maîtriser le projet.
+Voici un aperçu des fichiers et dossiers les plus importants et de leur rôle dans l'application.
 
 ```
 /paiement-stripe
-├───.gitignore
-├───package.json         # Dépendances et scripts du projet
-├───prisma/              # Tout ce qui concerne la base de données
-│   └───schema.prisma    # Définit les modèles de données (User, etc.)
-├───public/              # Fichiers statiques (images, icônes)
+├───prisma/
+│   ├───schema.prisma      # Définit les modèles de données (User, Product, Order).
+│   └───seed.ts            # Script pour pré-remplir la DB avec des produits.
+├───public/
+│   └───products/          # Images des produits.
 └───src/
     ├───app/
-    │   ├───layout.tsx     # Layout principal de l'application
-    │   ├───page.tsx       # Page d'accueil (publique)
-    │   ├───providers.tsx  # Fournisseur de session pour NextAuth
-    │   ├───api/           # Dossier pour toutes les routes d'API
-    │   │   ├───auth/      # Logique d'authentification
-    │   │   │   └───[...nextauth]/route.ts # Cœur de NextAuth.js
-    │   │   └───checkout/  # Logique de paiement
-    │   │       └───route.ts # Crée la session de paiement Stripe
-    │   ├───premium/       # Contenu protégé
-    │   │   └───page.tsx   # Page accessible uniquement aux abonnés
-    │   ├───paywall/       # Page "mur de paiement"
-    │   │   └───page.tsx   # Page incitant à s'abonner
-    │   ├───success/       # Page de succès après paiement
-    │   │   └───page.tsx
+    │   ├───layout.tsx       # Layout principal de l'application.
+    │   ├───page.tsx         # Page d'accueil (publique).
+    │   ├───providers.tsx    # Fournisseur de session pour NextAuth.
+    │   ├───api/
+    │   │   ├───auth/
+    │   │   │   └───[...nextauth]/route.ts # Cœur de NextAuth.js pour l'authentification.
+    │   │   ├───checkout/
+    │   │   │   └───route.ts   # Crée la session de paiement Stripe.
+    │   │   └───webhook/
+    │   │       └───route.ts   # Écoute les événements Stripe (webhooks).
+    │   ├───premium/
+    │   │   └───page.tsx     # Page accessible uniquement aux abonnés.
+    │   ├───products/
+    │   │   └───page.tsx     # Affiche tous les produits disponibles.
+    │   ├───payment-success/
+    │   │   └───page.tsx     # Page de succès après un paiement.
     │   └───cancel/
-    │       └───page.tsx   # Page d'annulation de paiement
+    │       └───page.tsx     # Page d'annulation de paiement.
+    ├───components/
+    │   └───Header.tsx       # Barre de navigation, affiche l'état de connexion.
     └───lib/
-        └───prisma.ts      # Instance unique du client Prisma (bonne pratique)
+        └───prisma.ts        # Instance unique du client Prisma.
 ```
 
-### Fichiers et Dossiers Clés
+## 2. Fonctionnalités Clés et Explication du Code
 
-*   **`prisma/schema.prisma`**: C'est ici que vous définissez votre base de données. Le modèle `User` est enrichi avec des champs comme `isSubscribed` et `stripeCustomerId` pour suivre le statut de l'abonnement de chaque utilisateur.
+### A. Base de Données avec Prisma
 
-*   **`src/app/api/auth/[...nextauth]/route.ts`**: Le moteur de l'authentification. Il configure les fournisseurs (ex: GitHub, Google) et utilise le `PrismaAdapter` pour lier NextAuth à votre base de données. Chaque utilisateur qui se connecte est automatiquement sauvegardé dans la table `User`.
+Le schéma de la base de données est le fondement de l'application.
 
-*   **`src/app/api/checkout/route.ts`**: Une route backend qui est appelée lorsque l'utilisateur clique sur "S'abonner". Son rôle est de communiquer avec Stripe pour créer une session de paiement sécurisée et de rediriger l'utilisateur vers la page de paiement de Stripe.
+**Fichier clé : `prisma/schema.prisma`**
 
-*   **`src/app/api/webhook/route.ts` (À créer)**: C'est le fichier le plus critique pour la synchronisation. Stripe envoie des événements (webhooks) à cette URL pour notifier votre application en temps réel (ex: "le paiement a réussi", "l'abonnement est annulé"). C'est cette route qui mettra à jour le champ `isSubscribed` dans votre base de données.
+*   **`User`** : Ce modèle a été enrichi pour gérer l'état de l'abonnement et la relation avec Stripe.
+    *   `isSubscribed`: Un booléen qui nous permet de savoir instantanément si un utilisateur est un abonné actif.
+    *   `stripeCustomerId`: Un champ crucial qui stocke l'ID du client dans Stripe. Cela permet de lier un utilisateur de notre base de données à un client dans Stripe, essentiel pour gérer les abonnements et les paiements.
 
-*   **`src/app/premium/page.tsx`**: Un exemple de page protégée. Avant d'afficher le contenu, ce composant vérifie côté serveur si l'utilisateur est connecté ET si son champ `isSubscribed` est à `true`.
+*   **`Product`** : Stocke les informations sur les articles à vendre (produits uniques ou abonnements).
+    *   `priceId`: L'ID du tarif (`price_...`) de ce produit dans Stripe.
 
-*   **`src/lib/prisma.ts`**: Permet de s'assurer qu'il n'y a qu'une seule instance active du client Prisma dans l'application, ce qui évite des problèmes de connexions multiples à la base de données.
+*   **`Order`** : Enregistre chaque transaction effectuée.
+    *   Permet de suivre quels produits ont été achetés par quel utilisateur.
 
-## 2. Étapes de Reproduction du Projet
+### B. Authentification avec NextAuth.js
 
-Voici les étapes pour construire ce projet à partir de zéro.
+L'authentification est gérée par NextAuth, qui s'intègre parfaitement avec Prisma.
 
-### Étape 1 : Initialisation et Installation
+**Fichier clé : `src/app/api/auth/[...nextauth]/route.ts`**
 
-1.  **Créez une nouvelle application Next.js :**
+Ce fichier configure NextAuth.js :
+1.  **`PrismaAdapter`** : C'est le pont entre NextAuth et notre base de données. Quand un utilisateur se connecte pour la première fois avec un fournisseur (ex: GitHub), l'adaptateur crée automatiquement une nouvelle entrée `User` dans notre base de données.
+2.  **`events`** : Nous utilisons l'événement `createUser` pour une action spécifique : dès qu'un nouvel utilisateur est créé dans notre base de données, nous créons également un client (`Customer`) correspondant dans Stripe. L'ID de ce client Stripe est immédiatement sauvegardé dans notre champ `user.stripeCustomerId`.
+
+```typescript
+// src/app/api/auth/[...nextauth]/route.ts
+
+// ...
+export const authOptions: NextAuthOptions = {
+  adapter: PrismaAdapter(prisma),
+  providers: [/* ... */],
+  events: {
+    createUser: async ({ user }) => {
+      const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
+        apiVersion: "2024-06-20",
+      });
+
+      await stripe.customers
+        .create({
+          email: user.email!,
+          name: user.name!,
+        })
+        .then(async (customer) => {
+          return prisma.user.update({
+            where: { id: user.id },
+            data: {
+              stripeCustomerId: customer.id,
+            },
+          });
+        });
+    },
+  },
+  // ...
+};
+// ...
+```
+
+### C. Processus de Paiement avec Stripe Checkout
+
+Lorsqu'un utilisateur décide d'acheter un produit ou de s'abonner.
+
+**Fichier clé : `src/app/api/checkout/route.ts`**
+
+Cette route d'API est appelée par le front-end. Voici son fonctionnement :
+1.  Elle reçoit les `priceId` des produits que l'utilisateur souhaite acheter.
+2.  Elle récupère l'utilisateur actuel via la session NextAuth pour obtenir son `stripeCustomerId`.
+3.  Elle crée une **Session de Paiement Stripe** (`checkout.session`) en spécifiant :
+    *   `customer`: Le `stripeCustomerId` de l'utilisateur.
+    *   `line_items`: La liste des produits (avec leur `priceId` et quantité).
+    *   `mode`: `'payment'` pour un achat unique, `'subscription'` pour un abonnement.
+    *   `success_url` et `cancel_url`: Les pages vers lesquelles l'utilisateur sera redirigé après la transaction.
+4.  Elle renvoie l'URL de la page de paiement Stripe au client, qui s'y redirige.
+
+### D. Synchronisation avec les Webhooks Stripe
+
+C'est le mécanisme le plus important pour maintenir notre base de données à jour avec ce qui se passe sur Stripe.
+
+**Fichier clé : `src/app/api/webhook/route.ts`**
+
+Stripe envoie des notifications (événements) à cette route de manière asynchrone.
+1.  **Sécurité** : La première étape est de vérifier que la requête provient bien de Stripe en utilisant la signature du webhook (`stripe-signature`) et notre secret de webhook (`STRIPE_WEBHOOK_SECRET`). C'est essentiel pour éviter les fausses notifications.
+2.  **Traitement des événements** : Nous utilisons un `switch` pour gérer différents types d'événements. Le plus important est :
+    *   **`checkout.session.completed`** : Cet événement est déclenché lorsqu'un paiement réussit.
+        *   Si c'est un **abonnement**, nous mettons à jour le champ `isSubscribed` de l'utilisateur à `true`.
+        *   Si c'est un **achat unique**, nous créons une nouvelle entrée dans la table `Order` pour enregistrer la vente.
+
+```typescript
+// src/app/api/webhook/route.ts
+
+// ...
+switch (event.type) {
+  case "checkout.session.completed":
+    const session = event.data.object;
+
+    if (session.mode === "subscription") {
+      // Gérer l'abonnement
+      await prisma.user.update({
+        where: { stripeCustomerId: session.customer as string },
+        data: { isSubscribed: true },
+      });
+    } else if (session.mode === "payment") {
+      // Gérer l'achat unique
+      const lineItems = await stripe.checkout.sessions.listLineItems(session.id);
+      // ... logique pour créer une commande dans la DB
+    }
+    break;
+  // ... autres cas comme 'customer.subscription.deleted'
+}
+// ...
+```
+
+## 3. Étapes pour Lancer le Projet en Local
+
+Voici les étapes pour faire fonctionner ce projet sur votre machine.
+
+### Étape 1 : Clonage et Installation
+
+1.  **Clonez le projet et installez les dépendances :**
     ```bash
-    npx create-next-app@latest --typescript --tailwind --eslint mon-app-stripe
-    cd mon-app-stripe
+    # git clone ...
+    cd paiement-stripe
+    npm install
     ```
 
-2.  **Installez les dépendances :**
+### Étape 2 : Configuration de l'Environnement
+
+1.  **Copiez le fichier d'environnement exemple :**
     ```bash
-    npm install prisma @prisma/client next-auth @auth/prisma-adapter stripe
-    npm install -D prisma
+    cp .env.example .env
     ```
+2.  **Remplissez le fichier `.env`** avec vos propres clés :
+    *   `DATABASE_URL`: L'URL de votre base de données (PostgreSQL, MySQL, etc.).
+    *   `GITHUB_CLIENT_ID` et `GITHUB_CLIENT_SECRET`: Depuis votre application OAuth GitHub.
+    *   `NEXTAUTH_SECRET`: Un secret aléatoire (`openssl rand -base64 32`).
+    *   `STRIPE_SECRET_KEY` et `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`: Depuis votre Dashboard Stripe.
+    *   `STRIPE_WEBHOOK_SECRET`: Généré par le CLI Stripe à l'étape 5.
 
-### Étape 2 : Configuration de la Base de Données
+### Étape 3 : Configuration de la Base de Données
 
-1.  **Initialisez Prisma :**
+1.  **Appliquez le schéma Prisma à votre base de données :**
     ```bash
-    npx prisma init
+    npx prisma migrate dev
     ```
+    Cette commande crée toutes les tables (`User`, `Product`, `Order`, etc.).
 
-2.  **Configurez votre `.env`** avec l'URL de votre base de données (PostgreSQL, MySQL, etc.).
-    ```env
-    # .env
-    DATABASE_URL="postgresql://user:password@host:port/database?sslmode=require"
-    ```
-
-3.  **Modifiez le `prisma/schema.prisma`** pour y inclure les modèles nécessaires pour NextAuth et les champs pour Stripe, comme montré dans la section d'analyse.
-
-4.  **Appliquez les changements à votre base de données :**
+2.  **Pré-remplissez la base de données avec les produits :**
     ```bash
-    npx prisma migrate dev --name initial-setup
+    npx prisma db seed
     ```
-    Cette commande crée les tables dans votre base de données.
+    Cela exécute le script `prisma/seed.ts` pour créer les produits que vous avez définis.
 
-### Étape 3 : Mise en Place de l'Authentification
+### Étape 4 : Création des Produits dans Stripe
 
-1.  **Créez la route d'API NextAuth** dans `src/app/api/auth/[...nextauth]/route.ts` et configurez-la avec l'adaptateur Prisma et au moins un fournisseur d'authentification (ex: GitHub).
+1.  **Connectez-vous à votre Dashboard Stripe.**
+2.  Allez dans la section "Produits" et créez les mêmes produits que ceux définis dans `prisma/seed.ts`.
+3.  Pour chaque produit, copiez son **ID de tarif** (`price_...`) et assurez-vous qu'il correspond à celui dans votre base de données (le `seed` le fait pour vous si les `priceId` sont corrects).
 
-2.  **Ajoutez les variables d'environnement** pour NextAuth et votre fournisseur dans `.env`.
-    ```env
-    # .env
-    GITHUB_CLIENT_ID=...
-    GITHUB_CLIENT_SECRET=...
-    NEXTAUTH_SECRET="VOTRE_SECRET_SUPER_COMPLEXE"
-    NEXTAUTH_URL="http://localhost:3000"
-    ```
-
-3.  **Enveloppez votre application** avec le `SessionProvider` comme vu dans le fichier `src/app/providers.tsx` et `src/app/layout.tsx`.
-
-### Étape 4 : Intégration de Stripe
-
-1.  **Créez un compte Stripe** et récupérez vos clés API.
-
-2.  **Créez un "Produit"** dans votre Dashboard Stripe (par exemple, "Abonnement Premium") et ajoutez-lui un **tarif** (ex: 10€/mois). Récupérez l'ID du tarif (`price_...`).
-
-3.  **Ajoutez les clés Stripe à votre `.env`** :
-    ```env
-    # .env
-    STRIPE_SECRET_KEY=sk_test_...
-    NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_test_...
-    STRIPE_PRICE_ID=price_...
-    ```
-
-4.  **Créez la route `src/app/api/checkout/route.ts`**. Cette route contiendra la logique pour créer une `checkout.session` Stripe.
-
-5.  **Créez la route `src/app/api/webhook/route.ts`**. C'est ici que vous écouterez l'événement `checkout.session.completed` pour mettre à jour la base de données.
-
-6.  **Configurez un endpoint de Webhook dans le Dashboard Stripe** pour pointer vers `http://localhost:3000/api/webhook` (en développement, utilisez l'outil `stripe listen` pour transférer les événements à votre machine locale). Récupérez le secret du webhook (`whsec_...`) et ajoutez-le à `.env`.
-    ```env
-    # .env
-    STRIPE_WEBHOOK_SECRET=whsec_...
-    ```
-
-### Étape 5 : Création des Pages Frontend
-
-1.  **Créez la page `/paywall`** avec un bouton "S'abonner". Le clic sur ce bouton doit appeler votre API `/api/checkout`.
-
-2.  **Créez la page `/premium`** et protégez-la en vérifiant la session de l'utilisateur et son statut `isSubscribed`.
-
-3.  **Créez les pages `/success` et `/cancel`** vers lesquelles Stripe redirigera l'utilisateur après la tentative de paiement.
-
-### Étape 6 : Lancement et Test
+### Étape 5 : Lancement et Test
 
 1.  **Démarrez le serveur de développement :**
     ```bash
     npm run dev
     ```
 
-2.  **Dans un autre terminal, lancez le CLI Stripe :**
+2.  **Dans un autre terminal, lancez le CLI Stripe** pour transférer les événements webhook à votre machine locale. La commande vous donnera le `STRIPE_WEBHOOK_SECRET` (`whsec_...`) à mettre dans votre `.env`.
     ```bash
     stripe listen --forward-to localhost:3000/api/webhook
     ```
 
-3.  **Testez le flux complet :** créez un compte, essayez d'accéder à la page premium (vous devriez être bloqué), allez sur la page de paiement, complétez le paiement avec une carte de test Stripe, et vérifiez que vous avez maintenant accès à la page premium.
+3.  **Testez le flux complet :**
+    *   Créez un compte.
+    *   Essayez d'accéder à la page `/premium` (vous devriez être bloqué).
+    *   Allez sur la page des produits, achetez un article ou souscrivez à l'abonnement.
+    *   Utilisez une carte de test Stripe pour finaliser le paiement.
+    *   Vérifiez que le webhook a bien été reçu dans le terminal Stripe.
+    *   Retournez sur la page `/premium` et vérifiez que vous y avez maintenant accès.

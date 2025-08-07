@@ -22,9 +22,11 @@ model User {
   image         String?
   hashedPassword String?
   hasPaid       Boolean  @default(false)
+  stripeCustomerId String?  @unique
 
   accounts      Account[]
   sessions      Session[]
+  orders        Order[]
 }
 
 model Account {
@@ -61,4 +63,40 @@ model VerificationToken {
   expires    DateTime
 
   @@unique([identifier, token])
+}
+
+model Product {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  price       Float   // Le prix en euros/dollars, etc.
+  image       String?
+
+  orderItems OrderItem[]
+}
+
+model Order {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+  status    String   @default("pending") // pending, paid, shipped
+  total     Float
+
+  // Informations sur la livraison
+  shippingCarrier String // Nom du transporteur
+  shippingCost    Float  // Coût de la livraison
+  shippingAddress String // Adresse de livraison (simplifié)
+
+  items OrderItem[]
+}
+
+model OrderItem {
+  id        String  @id @default(cuid())
+  orderId   String
+  order     Order   @relation(fields: [orderId], references: [id])
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  quantity  Int
+  price     Float   // Prix du produit au moment de la commande
 }
