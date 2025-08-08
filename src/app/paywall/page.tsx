@@ -12,6 +12,18 @@ export default function PaywallPage() {
 
   const [loading, setLoading] = useState(false);
 
+  /*************  ✨ Windsurf Command ⭐  *************/
+  /**
+   * Initiates the payment process by creating a checkout session.
+   *
+   * This function sets the loading state to true, makes a POST request
+   * to the "/api/checkout" endpoint to create a checkout session,
+   * retrieves the session ID from the response, and redirects the user
+   * to the Stripe checkout page using the session ID. Once the session
+   * is created or an error occurs, the loading state is set back to false.
+   */
+
+  /*******  8df7cd3d-cc04-4fb0-8508-3e921349a193  *******/
   const handlePayment = async () => {
     setLoading(true);
     const res = await fetch("/api/checkout", { method: "POST" });

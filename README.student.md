@@ -145,7 +145,7 @@ Voici les étapes pour faire fonctionner ce projet sur votre machine.
 
 2.  **Pré-remplissez la base de données avec les produits :**
     ```bash
-    npx prisma db seed
+    npm run prisma:seed
     ```
     Cela exécute le script `prisma/seed.ts` pour créer les produits que vous avez définis.
 
