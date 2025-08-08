@@ -133,7 +133,7 @@ Voici les étapes pour faire fonctionner ce projet sur votre machine.
     *   `DATABASE_URL`: L'URL de votre base de données (PostgreSQL, MySQL, etc.).
     *   `GITHUB_CLIENT_ID` et `GITHUB_CLIENT_SECRET`: Depuis votre application OAuth GitHub.
     *   `NEXTAUTH_SECRET`: Un secret aléatoire (`openssl rand -base64 32`).
-    *   `STRIPE_SECRET_KEY` et `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`: Depuis votre Dashboard Stripe.
+    *   `STRIPE_SECRET_KEY` et `NEXT_PUBLIC_STRIPE_PUBLIC_KEY`: Depuis votre Dashboard Stripe.
 
 ### Étape 3 : Configuration de la Base de Données
 
